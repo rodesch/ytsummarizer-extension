@@ -1,0 +1,61 @@
+body {
+  min-width: 380px;
+  max-width: 500px;
+  overflow-x: hidden;
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin-bottom: 0;
+}
+
+#video-thumbnail {
+  width: 80px;
+  height: 45px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.current-video {
+  max-width: 100%;
+}
+
+#video-title {
+  font-size: 14px;
+  max-width: 280px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#video-channel {
+  font-size: 12px;
+}
+
+#markdown-result {
+  font-family: monospace;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.footer {
+  font-size: 12px;
+}
+
+/* Tema escuro - será ativado automaticamente se o navegador estiver em modo escuro */
+@media (prefers-color-scheme: dark) {
+  body {
+    background-color: #212529;
+    color: #f8f9fa;
+  }
+  
+  .text-muted {
+    color: #adb5bd !important;
+  }
+  
+  #markdown-result {
+    background-color: #343a40;
+    color: #f8f9fa;
+    border-color: #495057;
+  }
+} 

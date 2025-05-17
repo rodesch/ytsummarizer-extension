@@ -1,0 +1,50 @@
+.yts-button {
+  background-color: #1976d2;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 8px 12px;
+  margin: 8px 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  font-family: 'Roboto', Arial, sans-serif;
+  font-size: 14px;
+  transition: background-color 0.2s;
+}
+
+.yts-button:hover {
+  background-color: #1565c0;
+}
+
+.yts-button i {
+  margin-right: 6px;
+}
+
+.yts-notification {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background-color: rgba(25, 118, 210, 0.9);
+  color: white;
+  padding: 10px 15px;
+  border-radius: 4px;
+  z-index: 9999;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+  display: flex;
+  align-items: center;
+  font-family: 'Roboto', Arial, sans-serif;
+  transform: translateY(100px);
+  opacity: 0;
+  transition: transform 0.3s, opacity 0.3s;
+}
+
+.yts-notification.show {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+.yts-notification i {
+  margin-right: 8px;
+  font-size: 16px;
+} 
