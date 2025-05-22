@@ -35,9 +35,16 @@
               <span class="ms-3"><i class="fas fa-clock"></i> <span id="video-duration">-</span></span>
             </div>
             <div class="d-flex flex-wrap gap-2 mb-2">
-              <button id="btn-summarize" class="btn btn-primary flex-fill">
-                <i class="fas fa-magic me-1"></i> Gerar Resumo
-              </button>
+              <div class="btn-group w-100" role="group">
+                <button id="btn-summarize" class="btn btn-primary flex-fill">
+                  <i class="fas fa-magic me-1"></i> Resumo
+                </button>
+                <button id="btn-transcribe" class="btn btn-primary flex-fill">
+                  <i class="fas fa-microphone-alt me-1"></i> Transcrição
+                </button>
+              </div>
+            </div>
+            <div class="d-flex flex-wrap gap-2 mb-2">
               <button id="btn-copy-url" class="btn btn-secondary flex-fill" disabled>
                 <i class="fas fa-copy me-1"></i> Copiar URL
               </button>
@@ -52,6 +59,12 @@
               <label for="comentario" class="form-label">Comentário:</label>
               <textarea id="comentario" class="form-control" rows="2" placeholder="Adicione um comentário pessoal"></textarea>
             </div>
+            <div class="form-check mb-2">
+              <input class="form-check-input" type="checkbox" id="incluir-transcricao">
+              <label class="form-check-label" for="incluir-transcricao">
+                Incluir transcrição ao gerar resumo
+              </label>
+            </div>
           </div>
         </div>
       </div>
@@ -60,7 +73,7 @@
     <div id="result-container" style="display: none;">
       <div class="card">
         <div class="card-header d-flex justify-content-between align-items-center">
-          <h3 class="mb-0 h5"><i class="fab fa-markdown me-2"></i>Resumo</h3>
+          <h3 class="mb-0 h5"><i id="result-icon" class="fab fa-markdown me-2"></i><span id="result-title">Resumo</span></h3>
           <button id="btn-toggle-view" class="btn btn-sm btn-link">
             <i class="fas fa-code"></i>
           </button>
@@ -86,10 +99,10 @@
     <div id="error-container" style="display: none;" class="alert alert-danger mt-3"></div>
     <div id="loading-container" style="display: none;" class="text-center mt-4 mb-3">
       <div class="spinner-border text-primary" role="status"></div>
-      <p class="mt-2">Gerando resumo com IA...</p>
+      <p id="loading-message" class="mt-2">Gerando resumo com IA...</p>
     </div>
     <div class="footer mt-2">
-      <p class="mb-0 small">v1.0 - <a href="#" id="link-options">Configurações</a></p>
+      <p class="mb-0 small">v1.1 - <a href="#" id="link-options">Configurações</a></p>
     </div>
   </div>
   <script src="js/marked.min.js"></script>

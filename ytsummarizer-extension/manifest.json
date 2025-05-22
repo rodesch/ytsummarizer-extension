@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "YouTube Summarizer",
-  "version": "1.0",
-  "description": "Gera resumos de vídeos do YouTube usando IA",
+  "version": "1.1",
+  "description": "Gera resumos e transcrições de vídeos do YouTube usando IA",
   "permissions": ["activeTab", "tabs", "storage", "scripting"],
-  "host_permissions": ["*://*.youtube.com/*", "http://212.85.23.16:5050/*"],
+  "host_permissions": ["*://*.youtube.com/*", "http://212.85.23.16:5050/*", "https://api.openai.com/*"],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
@@ -21,6 +21,7 @@
   "background": {
     "service_worker": "js/background.js"
   },
+  "options_page": "options.html",
   "content_scripts": [
     {
       "matches": ["*://*.youtube.com/*"],

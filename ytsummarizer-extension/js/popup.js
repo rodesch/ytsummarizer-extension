@@ -35,12 +35,18 @@ document.addEventListener('DOMContentLoaded', function() {
   const themeToggle = document.getElementById('theme-toggle');
   const themeIcon = themeToggle.querySelector('i');
   const linkOptions = document.getElementById('link-options');
+  const resultIcon = document.getElementById('result-icon');
+  const resultTitle = document.getElementById('result-title');
+  const loadingMessage = document.getElementById('loading-message');
+  const incluirTranscricaoCheck = document.getElementById('incluir-transcricao');
 
   // Configurações
   let API_URL = 'http://212.85.23.16:5050'; // URL do servidor remoto na VPS
   let currentVideoId = null;
   let currentVideoUrl = null;
   let currentMarkdown = null;
+  let currentTranscription = null;
+  let currentContentType = null;
   
   // Obter URL da API das configurações
   chrome.storage.sync.get('apiUrl', function(data) {
@@ -70,6 +76,7 @@ document.addEventListener('DOMContentLoaded', function() {
   btnOpenYoutube.addEventListener('click', abrirNoYoutube);
   btnShare.addEventListener('click', compartilharVideo);
   btnOpenNotePlan.addEventListener('click', abrirNotePlan);
+  incluirTranscricaoCheck.addEventListener('change', gerarTranscricao);
 
   // Polling para status do resumo
   let pollInterval = null;
@@ -85,6 +92,8 @@ document.addEventListener('DOMContentLoaded', function() {
   chrome.runtime.onMessage.addListener((message) => {
     if (message.action === 'summaryUpdated' && message.url === currentVideoUrl) {
       handleSummaryUpdate(message);
+    } else if (message.action === 'transcriptionUpdated' && message.url === currentVideoUrl) {
+      handleTranscriptionUpdate(message);
     }
   });
 
@@ -103,14 +112,52 @@ document.addEventListener('DOMContentLoaded', function() {
       loadingContainer.style.display = 'none';
       resultContainer.style.display = 'block';
       btnSummarize.disabled = false;
-      btnSummarize.innerHTML = '<i class="fas fa-magic me-1"></i> Gerar Resumo';
+      btnSummarize.innerHTML = '<i class="fas fa-magic me-1"></i> Resumo';
+      
+      // Atualizar ícone e título
+      resultIcon.className = 'fab fa-markdown me-2';
+      resultTitle.textContent = 'Resumo';
+      currentContentType = 'summary';
+      
       checkPlatform();
     } else if (update.status === 'error') {
       clearInterval(pollInterval);
       mostrarErro('Erro ao gerar resumo: ' + update.erro);
       loadingContainer.style.display = 'none';
       btnSummarize.disabled = false;
-      btnSummarize.innerHTML = '<i class="fas fa-magic me-1"></i> Gerar Resumo';
+      btnSummarize.innerHTML = '<i class="fas fa-magic me-1"></i> Resumo';
+    }
+  }
+  
+  function handleTranscriptionUpdate(update) {
+    if (update.status === 'done') {
+      clearInterval(pollInterval);
+      currentTranscription = update.markdown;
+      markdownOutput.value = update.markdown;
+      if (typeof window.marked === 'function') {
+        markdownPreview.innerHTML = window.marked(update.markdown);
+      } else if (window.marked && window.marked.parse) {
+        markdownPreview.innerHTML = window.marked.parse(update.markdown);
+      } else {
+        markdownPreview.innerHTML = `<pre>${update.markdown}</pre>`;
+      }
+      loadingContainer.style.display = 'none';
+      resultContainer.style.display = 'block';
+      btnTranscribe.disabled = false;
+      btnTranscribe.innerHTML = '<i class="fas fa-microphone-alt me-1"></i> Transcrição';
+      
+      // Atualizar ícone e título
+      resultIcon.className = 'fas fa-microphone-alt me-2';
+      resultTitle.textContent = 'Transcrição';
+      currentContentType = 'transcription';
+      
+      checkPlatform();
+    } else if (update.status === 'error') {
+      clearInterval(pollInterval);
+      mostrarErro('Erro ao gerar transcrição: ' + update.erro);
+      loadingContainer.style.display = 'none';
+      btnTranscribe.disabled = false;
+      btnTranscribe.innerHTML = '<i class="fas fa-microphone-alt me-1"></i> Transcrição';
     }
   }
 
@@ -125,29 +172,49 @@ document.addEventListener('DOMContentLoaded', function() {
       chrome.runtime.sendMessage({ action: 'getSummaryStatus', url: currentVideoUrl }, handleSummaryUpdate);
     }, 1500);
   }
+  
+  function pollTranscriptionStatus() {
+    if (pollInterval) clearInterval(pollInterval);
+    
+    // Verificar status imediatamente
+    chrome.runtime.sendMessage({ action: 'getTranscriptionStatus', url: currentVideoUrl }, handleTranscriptionUpdate);
+    
+    // Iniciar polling
+    pollInterval = setInterval(() => {
+      chrome.runtime.sendMessage({ action: 'getTranscriptionStatus', url: currentVideoUrl }, handleTranscriptionUpdate);
+    }, 1500);
+  }
 
   // Função para restaurar estado do resumo quando o popup abrir
   function restaurarEstado() {
     if (!currentVideoUrl) return;
     
+    // Verificar estado do resumo
     chrome.runtime.sendMessage({ action: 'getSummaryStatus', url: currentVideoUrl }, (response) => {
       if (response && response.status !== 'none') {
         if (response.status === 'done' && response.markdown) {
           currentMarkdown = response.markdown;
-          markdownOutput.value = response.markdown;
-          if (typeof window.marked === 'function') {
-            markdownPreview.innerHTML = window.marked(response.markdown);
-          } else if (window.marked && window.marked.parse) {
-            markdownPreview.innerHTML = window.marked.parse(response.markdown);
-          } else {
-            markdownPreview.innerHTML = `<pre>${response.markdown}</pre>`;
+          // Mostrar apenas se não estivermos exibindo outra coisa
+          if (!currentContentType || currentContentType === 'summary') {
+            markdownOutput.value = response.markdown;
+            if (typeof window.marked === 'function') {
+              markdownPreview.innerHTML = window.marked(response.markdown);
+            } else if (window.marked && window.marked.parse) {
+              markdownPreview.innerHTML = window.marked.parse(response.markdown);
+            } else {
+              markdownPreview.innerHTML = `<pre>${response.markdown}</pre>`;
+            }
+            loadingContainer.style.display = 'none';
+            resultContainer.style.display = 'block';
+            resultIcon.className = 'fab fa-markdown me-2';
+            resultTitle.textContent = 'Resumo';
+            currentContentType = 'summary';
           }
-          loadingContainer.style.display = 'none';
-          resultContainer.style.display = 'block';
           btnSummarize.disabled = false;
-          btnSummarize.innerHTML = '<i class="fas fa-magic me-1"></i> Gerar Resumo';
-        } else if (response.status === 'processing') {
+          btnSummarize.innerHTML = '<i class="fas fa-magic me-1"></i> Resumo';
+        } else if (response.status === 'processing' && (!currentContentType || currentContentType === 'summary')) {
           loadingContainer.style.display = 'block';
+          loadingMessage.textContent = 'Gerando resumo com IA...';
           resultContainer.style.display = 'none';
           btnSummarize.disabled = true;
           btnSummarize.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i> Processando...';
@@ -156,7 +223,45 @@ document.addEventListener('DOMContentLoaded', function() {
           mostrarErro('Erro ao gerar resumo: ' + response.erro);
           loadingContainer.style.display = 'none';
           btnSummarize.disabled = false;
-          btnSummarize.innerHTML = '<i class="fas fa-magic me-1"></i> Gerar Resumo';
+          btnSummarize.innerHTML = '<i class="fas fa-magic me-1"></i> Resumo';
+        }
+      }
+    });
+    
+    // Verificar estado da transcrição
+    chrome.runtime.sendMessage({ action: 'getTranscriptionStatus', url: currentVideoUrl }, (response) => {
+      if (response && response.status !== 'none') {
+        if (response.status === 'done' && response.markdown) {
+          currentTranscription = response.markdown;
+          // Mostrar apenas se estivermos no modo transcrição
+          if (currentContentType === 'transcription') {
+            markdownOutput.value = response.markdown;
+            if (typeof window.marked === 'function') {
+              markdownPreview.innerHTML = window.marked(response.markdown);
+            } else if (window.marked && window.marked.parse) {
+              markdownPreview.innerHTML = window.marked.parse(response.markdown);
+            } else {
+              markdownPreview.innerHTML = `<pre>${response.markdown}</pre>`;
+            }
+            loadingContainer.style.display = 'none';
+            resultContainer.style.display = 'block';
+            resultIcon.className = 'fas fa-microphone-alt me-2';
+            resultTitle.textContent = 'Transcrição';
+          }
+          btnTranscribe.disabled = false;
+          btnTranscribe.innerHTML = '<i class="fas fa-microphone-alt me-1"></i> Transcrição';
+        } else if (response.status === 'processing' && currentContentType === 'transcription') {
+          loadingContainer.style.display = 'block';
+          loadingMessage.textContent = 'Gerando transcrição com IA...';
+          resultContainer.style.display = 'none';
+          btnTranscribe.disabled = true;
+          btnTranscribe.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i> Processando...';
+          pollTranscriptionStatus();
+        } else if (response.status === 'error') {
+          mostrarErro('Erro ao gerar transcrição: ' + response.erro);
+          loadingContainer.style.display = 'none';
+          btnTranscribe.disabled = false;
+          btnTranscribe.innerHTML = '<i class="fas fa-microphone-alt me-1"></i> Transcrição';
         }
       }
     });
@@ -395,35 +500,105 @@ document.addEventListener('DOMContentLoaded', function() {
 
   // Gerar resumo do vídeo (agora via background)
   function gerarResumo() {
-    if (!currentVideoUrl) {
-      mostrarErro('URL do vídeo não encontrada.');
+    if (!currentVideoUrl || !currentVideoId) {
+      mostrarErro('Não foi possível identificar o vídeo atual.');
       return;
     }
-    // Mostrar indicador de carregamento
-    resultContainer.style.display = 'none';
+    
+    // Limpar erro anterior
     errorContainer.style.display = 'none';
-    loadingContainer.style.display = 'block';
+    
+    // Desativar botão enquanto processa
     btnSummarize.disabled = true;
     btnSummarize.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i> Processando...';
-    // Preparar dados de customização
+    
+    // Mostrar carregamento
+    loadingContainer.style.display = 'block';
+    loadingMessage.textContent = 'Gerando resumo com IA...';
+    resultContainer.style.display = 'none';
+    
+    // Atualizar tipo de conteúdo
+    currentContentType = 'summary';
+    
+    // Preparar dados para requisição
     const customizacao = {
-      comentario: comentarioInput.value.trim()
+      comentario: comentarioInput.value.trim(),
+      incluirTranscricao: incluirTranscricaoCheck.checked
     };
-    // Solicitar geração ao background
+    
+    // Chamar background para gerar resumo
     chrome.runtime.sendMessage({
       action: 'generateSummary',
       url: currentVideoUrl,
       customizacao
-    }, function(response) {
-      if (response && response.erro) {
-        mostrarErro('Erro ao iniciar geração: ' + response.erro);
+    }, (response) => {
+      if (response.status === 'processing') {
+        // Iniciar polling de status
+        pollSummaryStatus();
+      } else if (response.status === 'error') {
+        mostrarErro('Erro ao gerar resumo: ' + response.erro);
         loadingContainer.style.display = 'none';
         btnSummarize.disabled = false;
-        btnSummarize.innerHTML = '<i class="fas fa-magic me-1"></i> Gerar Resumo';
-        return;
+        btnSummarize.innerHTML = '<i class="fas fa-magic me-1"></i> Resumo';
       }
-      // Iniciar polling para status
-      pollSummaryStatus();
+    });
+  }
+
+  // Gerar transcrição
+  function gerarTranscricao() {
+    if (!currentVideoUrl || !currentVideoId) {
+      mostrarErro('Não foi possível identificar o vídeo atual.');
+      return;
+    }
+    
+    // Pedir chave API OpenAI
+    chrome.storage.sync.get('openaiKey', function(data) {
+      let apiKey = data.openaiKey || '';
+      
+      if (!apiKey) {
+        apiKey = prompt('Para transcrever o vídeo, é necessária uma chave da API da OpenAI (começa com "sk-"). Por favor, insira sua chave:');
+        
+        if (!apiKey) {
+          mostrarErro('Chave da API OpenAI não fornecida. A transcrição não pode ser realizada.');
+          return;
+        }
+        
+        // Salvar chave para uso futuro
+        chrome.storage.sync.set({ openaiKey: apiKey });
+      }
+      
+      // Limpar erro anterior
+      errorContainer.style.display = 'none';
+      
+      // Desativar botão enquanto processa
+      btnTranscribe.disabled = true;
+      btnTranscribe.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i> Processando...';
+      
+      // Mostrar carregamento
+      loadingContainer.style.display = 'block';
+      loadingMessage.textContent = 'Gerando transcrição com IA...';
+      resultContainer.style.display = 'none';
+      
+      // Atualizar tipo de conteúdo
+      currentContentType = 'transcription';
+      
+      // Chamar background para gerar transcrição
+      chrome.runtime.sendMessage({
+        action: 'generateTranscription',
+        url: currentVideoUrl,
+        videoId: currentVideoId,
+        apiKey: apiKey
+      }, (response) => {
+        if (response.status === 'processing') {
+          // Iniciar polling de status
+          pollTranscriptionStatus();
+        } else if (response.status === 'error') {
+          mostrarErro('Erro ao gerar transcrição: ' + response.erro);
+          loadingContainer.style.display = 'none';
+          btnTranscribe.disabled = false;
+          btnTranscribe.innerHTML = '<i class="fas fa-microphone-alt me-1"></i> Transcrição';
+        }
+      });
     });
   }
 
