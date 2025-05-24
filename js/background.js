@@ -1,14 +1,6 @@
 // Evento de instalação da extensão
 chrome.runtime.onInstalled.addListener(function() {
   console.log('YouTube Summarizer instalado');
-  
-  // Definir URL do servidor no armazenamento local
-  chrome.storage.sync.get('apiUrl', function(data) {
-    if (!data.apiUrl) {
-      // Usar o endereço IP da VPS (46.202.88.7) com a porta 5050
-      chrome.storage.sync.set({apiUrl: 'http://46.202.88.7:5050'});
-    }
-  });
 });
 
 // Habilitar a extensão apenas em páginas do YouTube
@@ -17,12 +9,6 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
     // Verifica se a URL é do YouTube
     const isYouTube = sender.tab.url.match(/^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.?be)\/.+$/);
     sendResponse({isYouTube: isYouTube});
-  } else if (request.action === 'getApiUrl') {
-    // Retorna a URL da API configurada
-    chrome.storage.sync.get('apiUrl', function(data) {
-      sendResponse({apiUrl: data.apiUrl || 'http://localhost:5000'});
-    });
-    return true; // Necessário para resposta assíncrona
   }
 });
 

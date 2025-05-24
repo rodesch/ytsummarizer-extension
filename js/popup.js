@@ -37,24 +37,20 @@ document.addEventListener('DOMContentLoaded', function() {
   const linkOptions = document.getElementById('link-options');
 
   // Configurações
-  let API_URL = 'http://46.202.88.7:5050'; // URL do servidor remoto na VPS
   let currentVideoId = null;
   let currentVideoUrl = null;
   let currentMarkdown = null;
-  
-  // Obter URL da API das configurações
-  chrome.storage.sync.get('apiUrl', function(data) {
-    if (data.apiUrl) {
-      API_URL = data.apiUrl;
-      console.log('API URL carregada das configurações:', API_URL);
-    }
-  });
+  let currentVideoInfo = null; // Armazenar informações completas do vídeo
+  let lastVideoId = null; // Para detectar mudanças de vídeo
 
   // Inicializa o tema
   inicializarTema();
   
   // Verificar plataforma (para NotePlan)
   checkPlatform();
+  
+  // Limpar resumos antigos (executa em background)
+  limparResumosAntigos();
   
   // Carrega informações do vídeo atual
   getCurrentTab();
@@ -105,6 +101,9 @@ document.addEventListener('DOMContentLoaded', function() {
       btnSummarize.disabled = false;
       btnSummarize.innerHTML = '<i class="fas fa-magic me-1"></i> Gerar Resumo';
       checkPlatform();
+      
+      // Salvar resumo localmente para persistência
+      salvarResumoLocal(currentVideoUrl, update.markdown, currentVideoInfo);
     } else if (update.status === 'error') {
       clearInterval(pollInterval);
       mostrarErro('Erro ao gerar resumo: ' + update.erro);
@@ -126,46 +125,164 @@ document.addEventListener('DOMContentLoaded', function() {
     }, 1500);
   }
 
+  // Função para salvar resumo localmente
+  function salvarResumoLocal(videoUrl, markdown, videoInfo) {
+    if (!videoUrl || !markdown) return;
+    
+    const resumoData = {
+      markdown: markdown,
+      videoInfo: videoInfo,
+      timestamp: Date.now(),
+      url: videoUrl
+    };
+    
+    // Usar videoId como chave para facilitar limpeza
+    const videoId = extractVideoId(videoUrl);
+    const storageKey = `resumo_${videoId}`;
+    
+    chrome.storage.local.set({ [storageKey]: resumoData }, () => {
+      console.log('Resumo salvo localmente para:', videoId);
+    });
+  }
+
+  // Função para recuperar resumo local
+  function recuperarResumoLocal(videoUrl) {
+    return new Promise((resolve) => {
+      if (!videoUrl) {
+        resolve(null);
+        return;
+      }
+      
+      const videoId = extractVideoId(videoUrl);
+      const storageKey = `resumo_${videoId}`;
+      
+      chrome.storage.local.get([storageKey], (result) => {
+        if (result[storageKey]) {
+          console.log('Resumo recuperado localmente para:', videoId);
+          resolve(result[storageKey]);
+        } else {
+          resolve(null);
+        }
+      });
+    });
+  }
+
+  // Função para limpar resumos antigos (opcional - para manter storage limpo)
+  function limparResumosAntigos() {
+    chrome.storage.local.get(null, (items) => {
+      const agora = Date.now();
+      const umDiaEmMs = 24 * 60 * 60 * 1000; // 1 dia
+      
+      for (const key in items) {
+        if (key.startsWith('resumo_') && items[key].timestamp) {
+          // Remover resumos com mais de 1 dia
+          if (agora - items[key].timestamp > umDiaEmMs) {
+            chrome.storage.local.remove([key]);
+            console.log('Resumo antigo removido:', key);
+          }
+        }
+      }
+    });
+  }
+
+  // Função para limpar estado quando mudar de vídeo
+  function limparEstadoAnterior() {
+    // Resetar variáveis
+    currentMarkdown = null;
+    currentVideoInfo = null;
+    
+    // Limpar interface
+    markdownOutput.value = '';
+    markdownPreview.innerHTML = '';
+    resultContainer.style.display = 'none';
+    errorContainer.style.display = 'none';
+    loadingContainer.style.display = 'none';
+    
+    // Resetar botão
+    btnSummarize.disabled = false;
+    btnSummarize.innerHTML = '<i class="fas fa-magic me-1"></i> Gerar Resumo';
+    
+    // Parar polling se estiver ativo
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
+  }
+
   // Função para restaurar estado do resumo quando o popup abrir
   function restaurarEstado() {
     if (!currentVideoUrl) return;
     
-    chrome.runtime.sendMessage({ action: 'getSummaryStatus', url: currentVideoUrl }, (response) => {
-      if (response && response.status !== 'none') {
-        if (response.status === 'done' && response.markdown) {
-          currentMarkdown = response.markdown;
-          markdownOutput.value = response.markdown;
-          if (typeof window.marked === 'function') {
-            markdownPreview.innerHTML = window.marked(response.markdown);
-          } else if (window.marked && window.marked.parse) {
-            markdownPreview.innerHTML = window.marked.parse(response.markdown);
-          } else {
-            markdownPreview.innerHTML = `<pre>${response.markdown}</pre>`;
-          }
-          loadingContainer.style.display = 'none';
-          resultContainer.style.display = 'block';
-          btnSummarize.disabled = false;
-          btnSummarize.innerHTML = '<i class="fas fa-magic me-1"></i> Gerar Resumo';
-        } else if (response.status === 'processing') {
-          loadingContainer.style.display = 'block';
-          resultContainer.style.display = 'none';
-          btnSummarize.disabled = true;
-          btnSummarize.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i> Processando...';
-          pollSummaryStatus();
-        } else if (response.status === 'error') {
-          mostrarErro('Erro ao gerar resumo: ' + response.erro);
-          loadingContainer.style.display = 'none';
-          btnSummarize.disabled = false;
-          btnSummarize.innerHTML = '<i class="fas fa-magic me-1"></i> Gerar Resumo';
+    // Primeiro tentar recuperar do storage local
+    recuperarResumoLocal(currentVideoUrl).then(resumoLocal => {
+      if (resumoLocal && resumoLocal.markdown) {
+        console.log('Restaurando resumo do storage local');
+        currentMarkdown = resumoLocal.markdown;
+        
+        // Restaurar informações do vídeo se disponíveis
+        if (resumoLocal.videoInfo) {
+          currentVideoInfo = resumoLocal.videoInfo;
         }
+        
+        // Atualizar interface
+        markdownOutput.value = resumoLocal.markdown;
+        if (typeof window.marked === 'function') {
+          markdownPreview.innerHTML = window.marked(resumoLocal.markdown);
+        } else if (window.marked && window.marked.parse) {
+          markdownPreview.innerHTML = window.marked.parse(resumoLocal.markdown);
+        } else {
+          markdownPreview.innerHTML = `<pre>${resumoLocal.markdown}</pre>`;
+        }
+        loadingContainer.style.display = 'none';
+        resultContainer.style.display = 'block';
+        btnSummarize.disabled = false;
+        btnSummarize.innerHTML = '<i class="fas fa-magic me-1"></i> Gerar Resumo';
+        checkPlatform();
+      } else {
+        // Se não houver resumo local, verificar status do background
+        chrome.runtime.sendMessage({ action: 'getSummaryStatus', url: currentVideoUrl }, (response) => {
+          if (response && response.status !== 'none') {
+            if (response.status === 'done' && response.markdown) {
+              currentMarkdown = response.markdown;
+              markdownOutput.value = response.markdown;
+              if (typeof window.marked === 'function') {
+                markdownPreview.innerHTML = window.marked(response.markdown);
+              } else if (window.marked && window.marked.parse) {
+                markdownPreview.innerHTML = window.marked.parse(response.markdown);
+              } else {
+                markdownPreview.innerHTML = `<pre>${response.markdown}</pre>`;
+              }
+              loadingContainer.style.display = 'none';
+              resultContainer.style.display = 'block';
+              btnSummarize.disabled = false;
+              btnSummarize.innerHTML = '<i class="fas fa-magic me-1"></i> Gerar Resumo';
+              
+              // Salvar no storage local para próximas aberturas
+              salvarResumoLocal(currentVideoUrl, response.markdown, currentVideoInfo);
+            } else if (response.status === 'processing') {
+              loadingContainer.style.display = 'block';
+              resultContainer.style.display = 'none';
+              btnSummarize.disabled = true;
+              btnSummarize.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i> Processando...';
+              pollSummaryStatus();
+            } else if (response.status === 'error') {
+              mostrarErro('Erro ao gerar resumo: ' + response.erro);
+              loadingContainer.style.display = 'none';
+              btnSummarize.disabled = false;
+              btnSummarize.innerHTML = '<i class="fas fa-magic me-1"></i> Gerar Resumo';
+            }
+          }
+        });
       }
     });
   }
 
   // Função para obter a aba atual do Chrome
   function getCurrentTab() {
+    console.log('Iniciando getCurrentTab...');
     chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
       const currentTab = tabs[0];
+      console.log('Aba atual:', currentTab?.url);
       
       if (currentTab && isYouTubeUrl(currentTab.url)) {
         currentVideoUrl = currentTab.url;
@@ -173,27 +290,36 @@ document.addEventListener('DOMContentLoaded', function() {
         
         if (currentVideoId) {
           console.log('Vídeo do YouTube detectado:', currentVideoId);
+          
+          // Verificar se mudou de vídeo
+          if (lastVideoId && lastVideoId !== currentVideoId) {
+            console.log('Mudança de vídeo detectada. Limpando estado anterior.');
+            limparEstadoAnterior();
+          }
+          lastVideoId = currentVideoId;
+          
           obterInfoVideo(currentVideoId);
           // Restaurar estado após obter informações do vídeo
           setTimeout(restaurarEstado, 100);
         } else {
+          console.error('Não foi possível extrair o ID do vídeo da URL:', currentTab.url);
           mostrarErro('Não foi possível extrair o ID do vídeo.');
           ocultarPlaceholder();
         }
       } else {
         // Tentar executar script na página para obter URL de elementos do YouTube
-        chrome.tabs.executeScript(
-          tabs[0].id,
-          { 
-            code: `
+        chrome.scripting.executeScript(
+          {
+            target: { tabId: tabs[0].id },
+            func: function() {
               // Tentar encontrar URL do vídeo na página
-              var videoUrl = '';
+              let videoUrl = '';
               
               // Verificar se há um player de vídeo do YouTube na página
-              var ytPlayer = document.querySelector('video');
+              const ytPlayer = document.querySelector('video');
               if (ytPlayer) {
                 // Tentar obter URL das meta tags
-                var ogUrlMeta = document.querySelector('meta[property="og:url"]');
+                const ogUrlMeta = document.querySelector('meta[property="og:url"]');
                 if (ogUrlMeta) {
                   videoUrl = ogUrlMeta.getAttribute('content');
                 }
@@ -204,33 +330,29 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
               }
               
-              videoUrl;
-            `
-          },
-          function(results) {
-            if (chrome.runtime.lastError) {
-              console.error('Erro ao executar script:', chrome.runtime.lastError);
-              mostrarErro('Esta extensão só funciona em páginas do YouTube.');
-              ocultarPlaceholder();
-              return;
-            }
-            
-            if (results && results[0] && isYouTubeUrl(results[0])) {
-              currentVideoUrl = results[0];
-              currentVideoId = extractVideoId(currentVideoUrl);
-              
-              if (currentVideoId) {
-                obterInfoVideo(currentVideoId);
-              } else {
-                mostrarErro('Não foi possível extrair o ID do vídeo.');
-                ocultarPlaceholder();
-              }
-            } else {
-              mostrarErro('Esta extensão só funciona em páginas do YouTube.');
-              ocultarPlaceholder();
+              return videoUrl;
             }
           }
-        );
+        ).then(results => {
+          if (results && results[0] && results[0].result && isYouTubeUrl(results[0].result)) {
+            currentVideoUrl = results[0].result;
+            currentVideoId = extractVideoId(currentVideoUrl);
+            
+            if (currentVideoId) {
+              obterInfoVideo(currentVideoId);
+            } else {
+              mostrarErro('Não foi possível extrair o ID do vídeo.');
+              ocultarPlaceholder();
+            }
+          } else {
+            mostrarErro('Esta extensão só funciona em páginas do YouTube.');
+            ocultarPlaceholder();
+          }
+        }).catch(error => {
+          console.error('Erro ao executar script:', error);
+          mostrarErro('Esta extensão só funciona em páginas do YouTube.');
+          ocultarPlaceholder();
+        });
       }
     });
   }
@@ -261,54 +383,154 @@ document.addEventListener('DOMContentLoaded', function() {
   // Obter informações do vídeo via API
   function obterInfoVideo(videoId) {
     // Mostrar indicativo visual de carregamento
-    console.log('Obtendo informações do vídeo:', videoId, 'API:', API_URL);
+    console.log('Obtendo informações do vídeo:', videoId);
     
-    fetch(`${API_URL}/preview?video_id=${videoId}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      mode: 'cors'
-    })
-      .then(response => {
-        if (!response.ok) {
-          throw new Error(`Erro ${response.status}: ${response.statusText}`);
-        }
-        return response.json();
-      })
+    // Definir timeout para evitar carregamento infinito
+    const timeout = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Timeout ao obter informações')), 10000);
+    });
+    
+    // Obter informações do vídeo usando extração da página
+    Promise.race([obterInfoVideoYouTube(videoId), timeout])
       .then(data => {
-        if (data.erro) {
-          throw new Error(data.erro);
-        }
-        
+        console.log('Informações obtidas:', data);
         atualizarInfoVideo(data);
         ocultarPlaceholder();
       })
       .catch(error => {
         console.error('Erro ao obter informações do vídeo:', error);
         
-        // Mensagem de erro mais detalhada
-        let mensagemErro = `Erro ao obter informações do vídeo: ${error.message}`;
-        
-        // Verificar se é erro de conexão
-        if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
-          mensagemErro = `Não foi possível conectar ao servidor (${API_URL}). Verifique se:
-          1. O servidor está rodando
-          2. A URL da API está correta nas configurações
-          3. Não há bloqueio de CORS`;
-        }
-        
-        mostrarErro(mensagemErro);
-        ocultarPlaceholder();
-        
-        // Exibir link para configurações
-        document.getElementById('link-options').style.color = 'red';
+        // Usar fallback sempre que algo falhar
+        console.log('Usando fallback para videoId:', videoId);
+        obterInfoVideoFallback(videoId)
+          .then(data => {
+            console.log('Fallback aplicado:', data);
+            atualizarInfoVideo(data);
+            ocultarPlaceholder();
+          })
+          .catch(fallbackError => {
+            console.error('Erro no fallback:', fallbackError);
+            mostrarErro('Não foi possível obter informações do vídeo. Tente recarregar a página.');
+            ocultarPlaceholder();
+          });
       });
+  }
+
+  // Função para obter informações do vídeo diretamente do YouTube
+  function obterInfoVideoYouTube(videoId) {
+    return new Promise((resolve, reject) => {
+      // Tentar extrair informações da página atual se estivermos no YouTube
+      chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+        const currentTab = tabs[0];
+        
+        if (currentTab && isYouTubeUrl(currentTab.url)) {
+          // Usar chrome.scripting.executeScript para Manifest V3
+          chrome.scripting.executeScript(
+            {
+              target: { tabId: currentTab.id },
+              func: function(videoId) {
+                try {
+                  // Tentar obter título
+                  let title = document.querySelector('h1.ytd-watch-metadata yt-formatted-string')?.textContent ||
+                             document.querySelector('h1.ytd-video-primary-info-renderer yt-formatted-string')?.textContent ||
+                             document.querySelector('h1[class*="title"]')?.textContent ||
+                             document.querySelector('meta[property="og:title"]')?.content ||
+                             document.title.replace(' - YouTube', '');
+                  
+                  // Tentar obter canal
+                  let channel = document.querySelector('ytd-channel-name a')?.textContent ||
+                               document.querySelector('#channel-name a')?.textContent ||
+                               document.querySelector('a[class*="channel"]')?.textContent ||
+                               document.querySelector('meta[name="author"]')?.content ||
+                               'Canal não disponível';
+                  
+                  // Thumbnail
+                  let thumbnail = document.querySelector('meta[property="og:image"]')?.content ||
+                                 `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
+                  
+                  // Tentar obter views
+                  let views = 'N/A';
+                  const viewsElements = [
+                    document.querySelector('#info .view-count'),
+                    document.querySelector('.view-count'),
+                    document.querySelector('[class*="view"]'),
+                    ...document.querySelectorAll('span')
+                  ];
+                  
+                  for (const element of viewsElements) {
+                    if (element && element.textContent && element.textContent.includes('visualizaç')) {
+                      views = element.textContent.trim();
+                      break;
+                    }
+                  }
+                  
+                  // Tentar obter duração
+                  let duration = 'N/A';
+                  const durationElement = document.querySelector('.ytp-time-duration') ||
+                                         document.querySelector('meta[property="video:duration"]');
+                  if (durationElement) {
+                    duration = durationElement.textContent || durationElement.content;
+                  }
+                  
+                  return {
+                    title: title?.trim() || 'Vídeo do YouTube',
+                    channel: channel?.trim() || 'Canal não disponível',
+                    thumbnail: thumbnail,
+                    views: views,
+                    publishedAt: 'N/A',
+                    duration: duration,
+                    videoId: videoId
+                  };
+                } catch (e) {
+                  console.error('Erro ao extrair dados:', e);
+                  return {
+                    title: 'Vídeo do YouTube',
+                    channel: 'Canal não disponível',
+                    thumbnail: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
+                    views: 'N/A',
+                    publishedAt: 'N/A',
+                    duration: 'N/A',
+                    videoId: videoId
+                  };
+                }
+              },
+              args: [videoId]
+            }
+          ).then(results => {
+            if (results && results[0] && results[0].result) {
+              resolve(results[0].result);
+            } else {
+              reject(new Error('Não foi possível extrair informações da página'));
+            }
+          }).catch(error => {
+            console.error('Erro no chrome.scripting.executeScript:', error);
+            reject(error);
+          });
+        } else {
+          reject(new Error('Não está em uma página do YouTube'));
+        }
+      });
+    });
+  }
+
+  // Função fallback para obter informações básicas
+  function obterInfoVideoFallback(videoId) {
+    return Promise.resolve({
+      title: 'Vídeo do YouTube',
+      channel: 'Canal não disponível',
+      thumbnail: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
+      views: 'N/A',
+      publishedAt: 'N/A',
+      duration: 'N/A',
+      videoId: videoId
+    });
   }
 
   // Atualizar informações do vídeo na interface
   function atualizarInfoVideo(info) {
+    // Armazenar informações globalmente para uso no NotePlan
+    currentVideoInfo = info;
+    
     videoTitle.textContent = info.title || 'Título não disponível';
     videoChannel.textContent = info.channel || 'Canal não disponível';
     
@@ -399,6 +621,17 @@ document.addEventListener('DOMContentLoaded', function() {
       mostrarErro('URL do vídeo não encontrada.');
       return;
     }
+    
+    // Limpar resumo anterior se existir
+    if (currentMarkdown) {
+      const videoId = extractVideoId(currentVideoUrl);
+      if (videoId) {
+        chrome.storage.local.remove([`resumo_${videoId}`]);
+        chrome.runtime.sendMessage({ action: 'clearSummary', url: currentVideoUrl });
+        console.log('Resumo anterior limpo para novo resumo');
+      }
+    }
+    
     // Mostrar indicador de carregamento
     resultContainer.style.display = 'none';
     errorContainer.style.display = 'none';
@@ -445,7 +678,27 @@ document.addEventListener('DOMContentLoaded', function() {
   function copiarMarkdown() {
     if (!currentMarkdown) return;
     
-    navigator.clipboard.writeText(currentMarkdown)
+    // Criar versão completa com informações do vídeo
+    let markdownCompleto = '';
+    
+    if (currentVideoInfo) {
+      const titulo = currentVideoInfo.title || 'Vídeo do YouTube';
+      const canal = currentVideoInfo.channel || 'Canal não disponível';
+      const thumbnail = currentVideoInfo.thumbnail || `https://img.youtube.com/vi/${currentVideoId}/maxresdefault.jpg`;
+      const videoLink = currentVideoUrl || `https://youtu.be/${currentVideoId}`;
+      
+      markdownCompleto += `# ${titulo}\n\n`;
+      markdownCompleto += `**Canal:** ${canal}\n\n`;
+      markdownCompleto += `**Link:** ${videoLink}\n\n`;
+      markdownCompleto += `**Thumbnail:** ![Thumbnail](${thumbnail})\n\n`;
+      markdownCompleto += `**Data:** ${new Date().toLocaleDateString('pt-BR')}\n\n`;
+      markdownCompleto += `---\n\n`;
+      markdownCompleto += currentMarkdown;
+    } else {
+      markdownCompleto = currentMarkdown;
+    }
+    
+    navigator.clipboard.writeText(markdownCompleto)
       .then(() => {
         btnCopyMarkdown.classList.add('copied');
         setTimeout(() => btnCopyMarkdown.classList.remove('copied'), 1000);
@@ -455,12 +708,9 @@ document.addEventListener('DOMContentLoaded', function() {
       });
   }
 
-  // Abrir no app
+  // Abrir no app (função desabilitada - sem servidor externo)
   function abrirNoApp() {
-    if (!currentVideoUrl) return;
-    
-    const appUrl = `${API_URL}/?url=${encodeURIComponent(currentVideoUrl)}`;
-    chrome.tabs.create({ url: appUrl });
+    mostrarMensagem('Funcionalidade não disponível - extensão funciona offline', 'error');
   }
   
   // Abrir no NotePlan
@@ -483,8 +733,35 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // Gerar link para o NotePlan
   function gerarLinkNotePlan(markdown) {
-    // Codificar o markdown para URL
-    const encodedText = encodeURIComponent(markdown);
+    // Criar cabeçalho com informações do vídeo
+    let notaCompleta = '';
+    
+    if (currentVideoInfo) {
+      const titulo = currentVideoInfo.title || 'Vídeo do YouTube';
+      const canal = currentVideoInfo.channel || 'Canal não disponível';
+      const thumbnail = currentVideoInfo.thumbnail || `https://img.youtube.com/vi/${currentVideoId}/maxresdefault.jpg`;
+      const videoLink = currentVideoUrl || `https://youtu.be/${currentVideoId}`;
+      
+      notaCompleta += `# ${titulo}\n\n`;
+      notaCompleta += `**Canal:** ${canal}\n\n`;
+      notaCompleta += `**Link:** ${videoLink}\n\n`;
+      notaCompleta += `**Thumbnail:** ![Thumbnail](${thumbnail})\n\n`;
+      notaCompleta += `**Data:** ${new Date().toLocaleDateString('pt-BR')}\n\n`;
+      notaCompleta += `---\n\n`;
+      notaCompleta += markdown;
+    } else {
+      // Fallback caso não tenha informações do vídeo
+      notaCompleta = `# Resumo do YouTube\n\n`;
+      if (currentVideoUrl) {
+        notaCompleta += `**Link:** ${currentVideoUrl}\n\n`;
+      }
+      notaCompleta += `**Data:** ${new Date().toLocaleDateString('pt-BR')}\n\n`;
+      notaCompleta += `---\n\n`;
+      notaCompleta += markdown;
+    }
+    
+    // Codificar o texto completo para URL
+    const encodedText = encodeURIComponent(notaCompleta);
     
     // Criar URL do protocolo do NotePlan
     return `noteplan://x-callback-url/addNote?text=${encodedText}&folder=YouTube`;
