@@ -4,7 +4,12 @@
   "version": "1.0",
   "description": "Gera resumos de vídeos do YouTube usando IA",
   "permissions": ["activeTab", "tabs", "storage", "scripting"],
-  "host_permissions": ["*://*.youtube.com/*", "https://api.openai.com/*"],
+  "host_permissions": [
+    "*://*.youtube.com/*", 
+    "*://*.googlevideo.com/*",
+    "https://api.openai.com/*",
+    "*://*.ytimg.com/*"
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {

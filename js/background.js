@@ -111,16 +111,32 @@ async function generateSummaryWithOpenAI(url, customizacao) {
       return;
     }
 
-    // Extrair transcript do vídeo
-    const transcript = await getVideoTranscript(url);
-    if (!transcript) {
-      updateSummaryStatus(url, 'error', null, 'Não foi possível obter a transcrição do vídeo.');
-      return;
+    // Tentar extrair transcript do vídeo
+    let transcript = null;
+    let summary = null;
+    
+    try {
+      transcript = await getVideoTranscript(url);
+      console.log('Transcrição obtida com sucesso:', transcript.length, 'caracteres');
+      
+      // Gerar resumo com OpenAI usando a transcrição
+      summary = await generateSummaryWithAI(transcript, settings, customizacao);
+      updateSummaryStatus(url, 'done', summary, null, transcript);
+      
+    } catch (transcriptError) {
+      console.log('Erro ao obter transcrição:', transcriptError.message);
+      
+      // Fallback: gerar resumo baseado nas informações do vídeo
+      try {
+        const videoInfo = await getVideoInfoForSummary(url);
+        summary = await generateSummaryWithoutTranscript(videoInfo, settings, customizacao);
+        updateSummaryStatus(url, 'done', summary, null, null);
+        
+      } catch (fallbackError) {
+        console.error('Fallback também falhou:', fallbackError.message);
+        updateSummaryStatus(url, 'error', null, 'Não foi possível obter a transcrição do vídeo e não há informações suficientes para gerar um resumo. Verifique se o vídeo possui legendas disponíveis.');
+      }
     }
-
-    // Gerar resumo com OpenAI
-    const summary = await generateSummaryWithAI(transcript, settings, customizacao);
-    updateSummaryStatus(url, 'done', summary, null, transcript);
 
   } catch (error) {
     console.error('Erro ao gerar resumo:', error);
@@ -136,26 +152,152 @@ async function getVideoTranscript(url) {
       throw new Error('ID do vídeo não encontrado');
     }
 
-    // Tentar extrair transcrição diretamente do YouTube
-    return await extractYouTubeTranscript(videoId);
+    // Tentar várias abordagens para obter a transcrição
+    console.log('Tentando obter transcrição para vídeo:', videoId);
+    
+    // Primeira tentativa: extrair via content script
+    try {
+      const transcript = await extractTranscriptViaContentScript(videoId);
+      if (transcript) {
+        return transcript;
+      }
+    } catch (error) {
+      console.log('Falha na extração via content script:', error.message);
+    }
+
+    // Segunda tentativa: extrair diretamente do YouTube
+    try {
+      const transcript = await extractYouTubeTranscript(videoId);
+      if (transcript) {
+        return transcript;
+      }
+    } catch (error) {
+      console.log('Falha na extração direta:', error.message);
+    }
+
+    // Terceira tentativa: usar API alternativa
+    try {
+      const transcript = await extractTranscriptAlternative(videoId);
+      if (transcript) {
+        return transcript;
+      }
+    } catch (error) {
+      console.log('Falha na API alternativa:', error.message);
+    }
+
+    throw new Error('Não foi possível obter a transcrição do vídeo. Verifique se o vídeo possui legendas disponíveis.');
 
   } catch (error) {
     console.error('Erro ao obter transcrição:', error);
-    throw new Error('Não foi possível obter a transcrição do vídeo. Verifique se o vídeo possui legendas disponíveis.');
+    throw error;
   }
 }
 
-// Função para extrair transcrição do YouTube
+// Função para extrair transcrição via content script
+async function extractTranscriptViaContentScript(videoId) {
+  return new Promise((resolve, reject) => {
+    // Buscar a aba ativa do YouTube
+    chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+      if (!tabs[0] || !tabs[0].url.includes('youtube.com')) {
+        reject(new Error('Não está em uma página do YouTube'));
+        return;
+      }
+
+      // Executar script na página para extrair transcrição
+      chrome.scripting.executeScript(
+        {
+          target: { tabId: tabs[0].id },
+          func: function(videoId) {
+            return new Promise((resolve, reject) => {
+              try {
+                // Tentar acessar o player do YouTube
+                const player = document.querySelector('#movie_player');
+                if (!player) {
+                  reject(new Error('Player do YouTube não encontrado'));
+                  return;
+                }
+
+                // Verificar se já existe transcrição na página
+                let transcriptText = '';
+                
+                // Buscar por transcrição já carregada
+                const transcriptElements = document.querySelectorAll('ytd-transcript-segment-renderer');
+                if (transcriptElements.length > 0) {
+                  transcriptText = Array.from(transcriptElements)
+                    .map(el => el.querySelector('.segment-text')?.textContent?.trim())
+                    .filter(text => text && text.length > 0)
+                    .join(' ');
+                }
+
+                if (transcriptText.length > 100) {
+                  resolve(transcriptText);
+                  return;
+                }
+
+                // Se não há transcrição visível, tentar abrir o painel de transcrição
+                const moreActionsButton = document.querySelector('[aria-label="Mais ações"], [aria-label="More actions"]');
+                if (moreActionsButton) {
+                  moreActionsButton.click();
+                  
+                  setTimeout(() => {
+                    const showTranscriptButton = document.querySelector('[aria-label="Mostrar transcrição"], [aria-label="Show transcript"]');
+                    if (showTranscriptButton) {
+                      showTranscriptButton.click();
+                      
+                      setTimeout(() => {
+                        const transcriptElements = document.querySelectorAll('ytd-transcript-segment-renderer');
+                        if (transcriptElements.length > 0) {
+                          const finalTranscript = Array.from(transcriptElements)
+                            .map(el => el.querySelector('.segment-text')?.textContent?.trim())
+                            .filter(text => text && text.length > 0)
+                            .join(' ');
+                          
+                          if (finalTranscript.length > 100) {
+                            resolve(finalTranscript);
+                          } else {
+                            reject(new Error('Transcrição vazia ou não disponível'));
+                          }
+                        } else {
+                          reject(new Error('Elementos de transcrição não encontrados'));
+                        }
+                      }, 2000);
+                    } else {
+                      reject(new Error('Botão de transcrição não encontrado'));
+                    }
+                  }, 1000);
+                } else {
+                  reject(new Error('Botão de mais ações não encontrado'));
+                }
+
+              } catch (error) {
+                reject(new Error('Erro ao extrair transcrição: ' + error.message));
+              }
+            });
+          },
+          args: [videoId]
+        }
+      ).then(results => {
+        if (results && results[0] && results[0].result) {
+          results[0].result.then(resolve).catch(reject);
+        } else {
+          reject(new Error('Falha na execução do script'));
+        }
+      }).catch(reject);
+    });
+  });
+}
+
+// Função para extrair transcrição do YouTube (método original melhorado)
 async function extractYouTubeTranscript(videoId) {
   try {
     // Buscar informações de legendas do vídeo
     const playerResponse = await getPlayerResponse(videoId);
     
-    if (!playerResponse.captions) {
+    if (!playerResponse || !playerResponse.captions) {
       throw new Error('Vídeo não possui legendas disponíveis');
     }
 
-    const captionTracks = playerResponse.captions.playerCaptionsTracklistRenderer.captionTracks;
+    const captionTracks = playerResponse.captions.playerCaptionsTracklistRenderer?.captionTracks;
     
     if (!captionTracks || captionTracks.length === 0) {
       throw new Error('Nenhuma legenda encontrada para este vídeo');
@@ -175,7 +317,12 @@ async function extractYouTubeTranscript(videoId) {
     }
 
     // Baixar o arquivo de legendas
-    const transcriptResponse = await fetch(selectedTrack.baseUrl + '&fmt=json3');
+    let transcriptUrl = selectedTrack.baseUrl;
+    if (!transcriptUrl.includes('fmt=')) {
+      transcriptUrl += '&fmt=json3';
+    }
+    
+    const transcriptResponse = await fetch(transcriptUrl);
     
     if (!transcriptResponse.ok) {
       throw new Error('Erro ao baixar arquivo de legendas');
@@ -184,23 +331,80 @@ async function extractYouTubeTranscript(videoId) {
     const transcriptData = await transcriptResponse.json();
     
     // Extrair texto das legendas
-    const transcript = transcriptData.events
-      .filter(event => event.segs)
-      .map(event => {
-        const text = event.segs.map(seg => seg.utf8).join('');
-        return text.trim();
-      })
-      .filter(text => text.length > 0)
-      .join(' ');
+    let transcript = '';
+    
+    if (transcriptData.events) {
+      transcript = transcriptData.events
+        .filter(event => event.segs)
+        .map(event => {
+          const text = event.segs.map(seg => seg.utf8).join('');
+          return text.trim();
+        })
+        .filter(text => text.length > 0)
+        .join(' ');
+    } else if (transcriptData.actions) {
+      // Formato alternativo
+      transcript = transcriptData.actions
+        .filter(action => action.updateEngagementPanelAction)
+        .map(action => action.updateEngagementPanelAction.content?.transcriptRenderer?.body?.transcriptBodyRenderer?.cueGroups)
+        .filter(cueGroups => cueGroups)
+        .flat()
+        .map(cueGroup => cueGroup.transcriptCueGroupRenderer?.cues)
+        .filter(cues => cues)
+        .flat()
+        .map(cue => cue.transcriptCueRenderer?.cue?.simpleText)
+        .filter(text => text)
+        .join(' ');
+    }
 
-    if (!transcript) {
-      throw new Error('Transcrição vazia ou inválida');
+    if (!transcript || transcript.length < 50) {
+      throw new Error('Transcrição vazia ou muito curta');
     }
 
     return transcript;
 
   } catch (error) {
-    console.error('Erro ao extrair transcrição:', error);
+    console.error('Erro ao extrair transcrição do YouTube:', error);
+    throw error;
+  }
+}
+
+// Função alternativa para extrair transcrição
+async function extractTranscriptAlternative(videoId) {
+  try {
+    // Tentar uma abordagem alternativa usando diferentes endpoints
+    const endpoints = [
+      `https://www.youtube.com/youtubei/v1/get_transcript?videoId=${videoId}`,
+      `https://www.youtube.com/api/timedtext?v=${videoId}&lang=pt&fmt=json3`,
+      `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&fmt=json3`
+    ];
+
+    for (const endpoint of endpoints) {
+      try {
+        const response = await fetch(endpoint);
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.events) {
+            const transcript = data.events
+              .filter(event => event.segs)
+              .map(event => event.segs.map(seg => seg.utf8).join(''))
+              .filter(text => text.trim().length > 0)
+              .join(' ');
+            
+            if (transcript.length > 50) {
+              return transcript;
+            }
+          }
+        }
+      } catch (error) {
+        console.log(`Endpoint ${endpoint} falhou:`, error.message);
+      }
+    }
+
+    throw new Error('Todos os endpoints alternativos falharam');
+
+  } catch (error) {
+    console.error('Erro na extração alternativa:', error);
     throw error;
   }
 }
@@ -208,18 +412,78 @@ async function extractYouTubeTranscript(videoId) {
 // Função para obter dados do player do YouTube
 async function getPlayerResponse(videoId) {
   try {
-    const response = await fetch(`https://www.youtube.com/watch?v=${videoId}`);
-    const html = await response.text();
+    console.log('Tentando obter dados do player para:', videoId);
     
-    // Extrair dados do player da página
-    const regex = /var ytInitialPlayerResponse = ({.+?});/;
-    const match = html.match(regex);
-    
-    if (!match) {
-      throw new Error('Não foi possível extrair dados do player');
+    // Tentar múltiplos métodos para obter dados do player
+    const methods = [
+      // Método 1: Página principal do vídeo
+      async () => {
+        const response = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+          }
+        });
+        const html = await response.text();
+        
+        // Tentar diferentes padrões de regex
+        const patterns = [
+          /var ytInitialPlayerResponse = ({.+?});/,
+          /window\["ytInitialPlayerResponse"\] = ({.+?});/,
+          /"ytInitialPlayerResponse":({.+?}),"ytInitialData"/
+        ];
+        
+        for (const pattern of patterns) {
+          const match = html.match(pattern);
+          if (match) {
+            return JSON.parse(match[1]);
+          }
+        }
+        
+        throw new Error('Dados do player não encontrados no HTML');
+      },
+      
+      // Método 2: API interna do YouTube
+      async () => {
+        const response = await fetch(`https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            context: {
+              client: {
+                clientName: 'WEB',
+                clientVersion: '2.20220801.00.00'
+              }
+            },
+            videoId: videoId
+          })
+        });
+        
+        if (response.ok) {
+          return await response.json();
+        }
+        
+        throw new Error('API interna falhou');
+      }
+    ];
+
+    // Tentar cada método
+    for (let i = 0; i < methods.length; i++) {
+      try {
+        console.log(`Tentando método ${i + 1} para obter dados do player`);
+        const playerResponse = await methods[i]();
+        
+        if (playerResponse && (playerResponse.captions || playerResponse.videoDetails)) {
+          console.log('Dados do player obtidos com sucesso');
+          return playerResponse;
+        }
+      } catch (error) {
+        console.log(`Método ${i + 1} falhou:`, error.message);
+      }
     }
 
-    return JSON.parse(match[1]);
+    throw new Error('Todos os métodos para obter dados do player falharam');
 
   } catch (error) {
     console.error('Erro ao obter player response:', error);
@@ -461,6 +725,154 @@ Crie um resumo seguindo esta estrutura em markdown:
 
   } catch (error) {
     console.error('Erro na API OpenAI:', error);
+    throw error;
+  }
+}
+
+// Função para obter informações do vídeo para resumo sem transcrição
+async function getVideoInfoForSummary(url) {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+      if (!tabs[0] || !tabs[0].url.includes('youtube.com')) {
+        reject(new Error('Não está em uma página do YouTube'));
+        return;
+      }
+
+      chrome.scripting.executeScript(
+        {
+          target: { tabId: tabs[0].id },
+          func: function() {
+            try {
+              const title = document.querySelector('h1.ytd-watch-metadata yt-formatted-string')?.textContent ||
+                           document.querySelector('h1.ytd-video-primary-info-renderer yt-formatted-string')?.textContent ||
+                           document.title.replace(' - YouTube', '');
+              
+              const channel = document.querySelector('ytd-channel-name #container #text-container yt-formatted-string a')?.textContent ||
+                             document.querySelector('ytd-channel-name a')?.textContent ||
+                             'Canal não identificado';
+              
+              const description = document.querySelector('#description-text')?.textContent ||
+                                 document.querySelector('meta[name="description"]')?.content ||
+                                 '';
+              
+              const views = document.querySelector('#info .view-count')?.textContent ||
+                           document.querySelector('.view-count')?.textContent ||
+                           '';
+              
+              const duration = document.querySelector('.ytp-time-duration')?.textContent || '';
+              
+              return {
+                title: title?.trim() || 'Título não disponível',
+                channel: channel?.trim() || 'Canal não disponível', 
+                description: description?.trim() || '',
+                views: views?.trim() || '',
+                duration: duration?.trim() || '',
+                url: window.location.href
+              };
+            } catch (error) {
+              return {
+                title: 'Título não disponível',
+                channel: 'Canal não disponível',
+                description: '',
+                views: '',
+                duration: '',
+                url: window.location.href
+              };
+            }
+          }
+        }
+      ).then(results => {
+        if (results && results[0] && results[0].result) {
+          resolve(results[0].result);
+        } else {
+          reject(new Error('Falha ao obter informações do vídeo'));
+        }
+      }).catch(reject);
+    });
+  });
+}
+
+// Função para gerar resumo sem transcrição (baseado em metadados)
+async function generateSummaryWithoutTranscript(videoInfo, settings, customizacao) {
+  const apiKey = settings.openaiApiKey;
+  const model = settings.openaiModel || 'gpt-4o-mini';
+  const maxTokens = Math.min(settings.maxTokens || 1000, 1000); // Limitar tokens para metadados
+  const language = settings.summaryLanguage || 'pt-BR';
+
+  let prompt = `Baseado nas seguintes informações limitadas de um vídeo do YouTube, crie um resumo estruturado em ${language}:
+
+INFORMAÇÕES DO VÍDEO:
+- Título: ${videoInfo.title}
+- Canal: ${videoInfo.channel}
+- Descrição: ${videoInfo.description || 'Não disponível'}
+- Duração: ${videoInfo.duration || 'Não disponível'}
+- Visualizações: ${videoInfo.views || 'Não disponível'}
+- URL: ${videoInfo.url}
+
+IMPORTANTE: Como não temos acesso à transcrição completa do vídeo, crie um resumo baseado apenas no título, descrição e metadados disponíveis. Seja claro que este é um resumo limitado.
+
+Crie um resumo seguindo esta estrutura em markdown:
+
+# 📝 Resumo Limitado (Sem Transcrição)
+
+## 🎯 Informações Básicas
+**Título:** ${videoInfo.title}
+**Canal:** ${videoInfo.channel}
+**Duração:** ${videoInfo.duration || 'N/A'}
+
+## 📋 Análise Baseada em Metadados
+[Análise do que pode ser inferido do título e descrição]
+
+## 💡 Possíveis Tópicos Abordados
+[Inferências baseadas no título e descrição disponível]
+
+## ⚠️ Limitações
+Este resumo foi gerado sem acesso à transcrição completa do vídeo. Para um resumo mais detalhado e preciso, certifique-se de que o vídeo possui legendas automáticas ou manuais habilitadas.
+
+## 🔗 Acesso ao Conteúdo Completo
+Para obter todas as informações, assista ao vídeo completo em: ${videoInfo.url}
+
+---
+*Resumo limitado gerado por IA - sem transcrição disponível*`;
+
+  if (customizacao && customizacao.comentario) {
+    prompt += `\n\nCONSIDERAÇÕES ADICIONAIS DO USUÁRIO: ${customizacao.comentario}`;
+  }
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: model,
+        messages: [
+          {
+            role: 'system',
+            content: `Você é um assistente especializado em analisar vídeos do YouTube. Quando não há transcrição disponível, crie resumos informativos baseados nos metadados disponíveis. Sempre responda em ${language} com formatação markdown.`
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        max_tokens: maxTokens,
+        temperature: 0.7
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error?.message || 'Erro na API OpenAI');
+    }
+
+    const data = await response.json();
+    return data.choices[0].message.content;
+
+  } catch (error) {
+    console.error('Erro ao gerar resumo sem transcrição:', error);
     throw error;
   }
 }
