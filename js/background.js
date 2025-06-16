@@ -111,31 +111,50 @@ async function generateSummaryWithOpenAI(url, customizacao) {
       return;
     }
 
-    // Tentar extrair transcript do vídeo
-    let transcript = null;
-    let summary = null;
-    
+    // Primeiro tentar obter informações básicas do vídeo (sempre funciona)
+    let videoInfo = null;
     try {
-      transcript = await getVideoTranscript(url);
+      videoInfo = await getVideoInfoForSummary(url);
+      console.log('Informações básicas do vídeo obtidas:', videoInfo.title);
+    } catch (error) {
+      console.error('Erro ao obter informações básicas:', error);
+      updateSummaryStatus(url, 'error', null, 'Não foi possível acessar as informações do vídeo.');
+      return;
+    }
+
+    // Tentar obter transcrição (opcional, com timeout)
+    let transcript = null;
+    try {
+      console.log('Tentando obter transcrição...');
+      
+      // Timeout de 10 segundos para não travar
+      const transcriptPromise = getVideoTranscript(url);
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Timeout na extração de transcrição')), 10000)
+      );
+      
+      transcript = await Promise.race([transcriptPromise, timeoutPromise]);
       console.log('Transcrição obtida com sucesso:', transcript.length, 'caracteres');
-      
-      // Gerar resumo com OpenAI usando a transcrição
-      summary = await generateSummaryWithAI(transcript, settings, customizacao);
-      updateSummaryStatus(url, 'done', summary, null, transcript);
-      
     } catch (transcriptError) {
-      console.log('Erro ao obter transcrição:', transcriptError.message);
-      
-      // Fallback: gerar resumo baseado nas informações do vídeo
-      try {
-        const videoInfo = await getVideoInfoForSummary(url);
+      console.log('Transcrição não disponível:', transcriptError.message);
+      // Continuar sem transcrição
+    }
+
+    // Gerar resumo (com ou sem transcrição)
+    let summary = null;
+    try {
+      if (transcript && transcript.length > 100) {
+        console.log('Gerando resumo COM transcrição');
+        summary = await generateSummaryWithAI(transcript, settings, customizacao);
+        updateSummaryStatus(url, 'done', summary, null, transcript);
+      } else {
+        console.log('Gerando resumo SEM transcrição (baseado em metadados)');
         summary = await generateSummaryWithoutTranscript(videoInfo, settings, customizacao);
         updateSummaryStatus(url, 'done', summary, null, null);
-        
-      } catch (fallbackError) {
-        console.error('Fallback também falhou:', fallbackError.message);
-        updateSummaryStatus(url, 'error', null, 'Não foi possível obter a transcrição do vídeo e não há informações suficientes para gerar um resumo. Verifique se o vídeo possui legendas disponíveis.');
       }
+    } catch (summaryError) {
+      console.error('Erro ao gerar resumo:', summaryError.message);
+      updateSummaryStatus(url, 'error', null, 'Erro ao gerar resumo: ' + summaryError.message);
     }
 
   } catch (error) {
@@ -751,9 +770,28 @@ async function getVideoInfoForSummary(url) {
                              document.querySelector('ytd-channel-name a')?.textContent ||
                              'Canal não identificado';
               
-              const description = document.querySelector('#description-text')?.textContent ||
-                                 document.querySelector('meta[name="description"]')?.content ||
-                                 '';
+              // Tentar extrair descrição de várias formas
+              let description = '';
+              const descElements = [
+                '#description-text',
+                '#description .content',
+                '#meta-contents #description',
+                'meta[name="description"]',
+                '#watch-description-text',
+                '.watch-description'
+              ];
+              
+              for (const selector of descElements) {
+                const element = document.querySelector(selector);
+                if (element) {
+                  description = selector.includes('meta') ? 
+                    element.getAttribute('content') : 
+                    element.textContent;
+                  if (description && description.trim().length > 0) {
+                    break;
+                  }
+                }
+              }
               
               const views = document.querySelector('#info .view-count')?.textContent ||
                            document.querySelector('.view-count')?.textContent ||
@@ -799,7 +837,7 @@ async function generateSummaryWithoutTranscript(videoInfo, settings, customizaca
   const maxTokens = Math.min(settings.maxTokens || 1000, 1000); // Limitar tokens para metadados
   const language = settings.summaryLanguage || 'pt-BR';
 
-  let prompt = `Baseado nas seguintes informações limitadas de um vídeo do YouTube, crie um resumo estruturado em ${language}:
+  let prompt = `Analise as seguintes informações de um vídeo do YouTube e crie um resumo útil e informativo em ${language}:
 
 INFORMAÇÕES DO VÍDEO:
 - Título: ${videoInfo.title}
@@ -809,31 +847,50 @@ INFORMAÇÕES DO VÍDEO:
 - Visualizações: ${videoInfo.views || 'Não disponível'}
 - URL: ${videoInfo.url}
 
-IMPORTANTE: Como não temos acesso à transcrição completa do vídeo, crie um resumo baseado apenas no título, descrição e metadados disponíveis. Seja claro que este é um resumo limitado.
+Baseado no título e descrição, forneça um resumo estruturado que seja útil para o usuário. Seja específico sobre o que pode ser inferido e faça sugestões inteligentes sobre o conteúdo.
 
 Crie um resumo seguindo esta estrutura em markdown:
 
-# 📝 Resumo Limitado (Sem Transcrição)
+# 📝 ${videoInfo.title}
 
-## 🎯 Informações Básicas
-**Título:** ${videoInfo.title}
-**Canal:** ${videoInfo.channel}
-**Duração:** ${videoInfo.duration || 'N/A'}
+## 📺 Informações do Vídeo
+- **Canal:** ${videoInfo.channel}
+- **Duração:** ${videoInfo.duration || 'Não informada'}
+- **Visualizações:** ${videoInfo.views || 'Não informado'}
 
-## 📋 Análise Baseada em Metadados
-[Análise do que pode ser inferido do título e descrição]
+## 🎯 Resumo Baseado no Título e Descrição
 
-## 💡 Possíveis Tópicos Abordados
-[Inferências baseadas no título e descrição disponível]
+### Tema Principal
+[Identifique o tema central baseado no título]
 
-## ⚠️ Limitações
-Este resumo foi gerado sem acesso à transcrição completa do vídeo. Para um resumo mais detalhado e preciso, certifique-se de que o vídeo possui legendas automáticas ou manuais habilitadas.
+### Possíveis Tópicos Abordados
+[Liste tópicos prováveis baseados no título e descrição]
 
-## 🔗 Acesso ao Conteúdo Completo
-Para obter todas as informações, assista ao vídeo completo em: ${videoInfo.url}
+### Público-Alvo
+[Identifique para quem o vídeo parece ser direcionado]
+
+### Categoria/Tipo de Conteúdo
+[Classifique o tipo de vídeo: tutorial, review, discussão, etc.]
+
+${videoInfo.description && videoInfo.description.length > 50 ? `
+## 📄 Análise da Descrição
+[Analise os pontos principais mencionados na descrição]
+
+### Pontos-Chave da Descrição
+[Extraia informações importantes da descrição]
+` : ''}
+
+## 💡 O Que Esperar Deste Vídeo
+[Expectativas baseadas nas informações disponíveis]
+
+## 🔍 Para Resumo Mais Detalhado
+Para obter um resumo completo com análise do conteúdo falado, certifique-se de que o vídeo possui legendas habilitadas (CC) e tente gerar o resumo novamente.
+
+## 🔗 Link do Vídeo
+${videoInfo.url}
 
 ---
-*Resumo limitado gerado por IA - sem transcrição disponível*`;
+*Resumo baseado em metadados - gerado por IA*`;
 
   if (customizacao && customizacao.comentario) {
     prompt += `\n\nCONSIDERAÇÕES ADICIONAIS DO USUÁRIO: ${customizacao.comentario}`;
