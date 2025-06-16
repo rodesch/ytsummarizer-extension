@@ -18,6 +18,9 @@ document.addEventListener('DOMContentLoaded', function() {
   const btnOpenYoutube = document.getElementById('btn-open-youtube');
   const btnShare = document.getElementById('btn-share');
   const btnOpenNotePlan = document.getElementById('btn-open-noteplan');
+  const btnCopyTranscript = document.getElementById('btn-copy-transcript');
+  const btnToggleTranscriptView = document.getElementById('btn-toggle-transcript-view');
+  const btnGenerateFromTranscript = document.getElementById('btn-generate-from-transcript');
   const videoTitle = document.getElementById('video-title');
   const videoChannel = document.getElementById('video-channel');
   const videoDate = document.getElementById('video-date');
@@ -28,6 +31,8 @@ document.addEventListener('DOMContentLoaded', function() {
   const loadingPlaceholder = document.getElementById('loading-placeholder');
   const markdownOutput = document.getElementById('markdown-output');
   const markdownPreview = document.getElementById('markdown-preview');
+  const transcriptOutput = document.getElementById('transcript-output');
+  const transcriptPreview = document.getElementById('transcript-preview');
   const resultContainer = document.getElementById('result-container');
   const errorContainer = document.getElementById('error-container');
   const loadingContainer = document.getElementById('loading-container');
@@ -40,6 +45,7 @@ document.addEventListener('DOMContentLoaded', function() {
   let currentVideoId = null;
   let currentVideoUrl = null;
   let currentMarkdown = null;
+  let currentTranscript = null; // Armazenar transcrição completa
   let currentVideoInfo = null; // Armazenar informações completas do vídeo
   let lastVideoId = null; // Para detectar mudanças de vídeo
 
@@ -66,6 +72,9 @@ document.addEventListener('DOMContentLoaded', function() {
   btnOpenYoutube.addEventListener('click', abrirNoYoutube);
   btnShare.addEventListener('click', compartilharVideo);
   btnOpenNotePlan.addEventListener('click', abrirNotePlan);
+  btnCopyTranscript.addEventListener('click', copiarTranscricao);
+  btnToggleTranscriptView.addEventListener('click', alternarVisualizacaoTranscricao);
+  btnGenerateFromTranscript.addEventListener('click', gerarResumo);
 
   // Polling para status do resumo
   let pollInterval = null;
@@ -89,6 +98,14 @@ document.addEventListener('DOMContentLoaded', function() {
       clearInterval(pollInterval);
       currentMarkdown = update.markdown;
       markdownOutput.value = update.markdown;
+      
+      // Atualizar transcrição se disponível
+      if (update.transcript) {
+        currentTranscript = update.transcript;
+        transcriptOutput.value = update.transcript;
+        transcriptPreview.innerHTML = `<pre>${update.transcript}</pre>`;
+      }
+      
       if (typeof window.marked === 'function') {
         markdownPreview.innerHTML = window.marked(update.markdown);
       } else if (window.marked && window.marked.parse) {
@@ -102,8 +119,8 @@ document.addEventListener('DOMContentLoaded', function() {
       btnSummarize.innerHTML = '<i class="fas fa-magic me-1"></i> Gerar Resumo';
       checkPlatform();
       
-      // Salvar resumo localmente para persistência
-      salvarResumoLocal(currentVideoUrl, update.markdown, currentVideoInfo);
+      // Salvar resumo e transcrição localmente para persistência
+      salvarResumoLocal(currentVideoUrl, update.markdown, currentVideoInfo, update.transcript);
     } else if (update.status === 'error') {
       clearInterval(pollInterval);
       mostrarErro('Erro ao gerar resumo: ' + update.erro);
@@ -126,11 +143,12 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   // Função para salvar resumo localmente
-  function salvarResumoLocal(videoUrl, markdown, videoInfo) {
+  function salvarResumoLocal(videoUrl, markdown, videoInfo, transcript = null) {
     if (!videoUrl || !markdown) return;
     
     const resumoData = {
       markdown: markdown,
+      transcript: transcript,
       videoInfo: videoInfo,
       timestamp: Date.now(),
       url: videoUrl
@@ -189,11 +207,14 @@ document.addEventListener('DOMContentLoaded', function() {
   function limparEstadoAnterior() {
     // Resetar variáveis
     currentMarkdown = null;
+    currentTranscript = null;
     currentVideoInfo = null;
     
     // Limpar interface
     markdownOutput.value = '';
     markdownPreview.innerHTML = '';
+    transcriptOutput.value = '';
+    transcriptPreview.innerHTML = '';
     resultContainer.style.display = 'none';
     errorContainer.style.display = 'none';
     loadingContainer.style.display = 'none';
@@ -218,6 +239,13 @@ document.addEventListener('DOMContentLoaded', function() {
       if (resumoLocal && resumoLocal.markdown) {
         console.log('Restaurando resumo do storage local');
         currentMarkdown = resumoLocal.markdown;
+        
+        // Restaurar transcrição se disponível
+        if (resumoLocal.transcript) {
+          currentTranscript = resumoLocal.transcript;
+          transcriptOutput.value = resumoLocal.transcript;
+          transcriptPreview.innerHTML = `<pre>${resumoLocal.transcript}</pre>`;
+        }
         
         // Restaurar informações do vídeo se disponíveis
         if (resumoLocal.videoInfo) {
@@ -437,9 +465,14 @@ document.addEventListener('DOMContentLoaded', function() {
                              document.querySelector('meta[property="og:title"]')?.content ||
                              document.title.replace(' - YouTube', '');
                   
-                  // Tentar obter canal
-                  let channel = document.querySelector('ytd-channel-name a')?.textContent ||
+                  // Tentar obter canal com seletores mais robustos
+                  let channel = document.querySelector('ytd-channel-name #container #text-container yt-formatted-string a')?.textContent ||
+                               document.querySelector('ytd-channel-name a')?.textContent ||
+                               document.querySelector('#owner-text a')?.textContent ||
                                document.querySelector('#channel-name a')?.textContent ||
+                               document.querySelector('a.yt-simple-endpoint.style-scope.yt-formatted-string')?.textContent ||
+                               document.querySelector('[id="owner-text"] a')?.textContent ||
+                               document.querySelector('.ytd-video-owner-renderer a')?.textContent ||
                                document.querySelector('a[class*="channel"]')?.textContent ||
                                document.querySelector('meta[name="author"]')?.content ||
                                'Canal não disponível';
@@ -838,5 +871,39 @@ document.addEventListener('DOMContentLoaded', function() {
   function abrirConfiguracoes() {
     chrome.runtime.openOptionsPage();
     window.close(); // Fechar popup ao abrir as configurações
+  }
+
+  // Copiar transcrição para a área de transferência
+  function copiarTranscricao() {
+    if (!currentTranscript) {
+      mostrarMensagem('Nenhuma transcrição disponível. Gere um resumo primeiro.', 'error');
+      return;
+    }
+    
+    navigator.clipboard.writeText(currentTranscript)
+      .then(() => {
+        btnCopyTranscript.classList.add('copied');
+        setTimeout(() => btnCopyTranscript.classList.remove('copied'), 1000);
+        mostrarMensagem('Transcrição copiada!', 'success');
+      })
+      .catch(err => {
+        console.error('Erro ao copiar transcrição:', err);
+        mostrarMensagem('Erro ao copiar transcrição', 'error');
+      });
+  }
+
+  // Alternar entre visualização de transcrição raw e formatada
+  function alternarVisualizacaoTranscricao() {
+    const isRawVisible = transcriptOutput.style.display !== 'none';
+    
+    if (isRawVisible) {
+      transcriptOutput.style.display = 'none';
+      transcriptPreview.style.display = 'block';
+      btnToggleTranscriptView.innerHTML = '<i class="fas fa-code"></i>';
+    } else {
+      transcriptOutput.style.display = 'block';
+      transcriptPreview.style.display = 'none';
+      btnToggleTranscriptView.innerHTML = '<i class="fas fa-eye"></i>';
+    }
   }
 }); 

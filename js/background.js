@@ -28,8 +28,8 @@ chrome.runtime.onConnect.addListener(function(port) {
 const summaries = {};
 
 // Função para atualizar o status do resumo e notificar
-function updateSummaryStatus(url, status, markdown = null, erro = null) {
-  summaries[url] = { status, markdown, erro };
+function updateSummaryStatus(url, status, markdown = null, erro = null, transcript = null) {
+  summaries[url] = { status, markdown, erro, transcript };
   // Salvar no storage local para persistência
   chrome.storage.local.set({ summaries });
   // Notificar todos os listeners
@@ -38,7 +38,8 @@ function updateSummaryStatus(url, status, markdown = null, erro = null) {
     url,
     status,
     markdown,
-    erro
+    erro,
+    transcript
   });
 }
 
@@ -119,7 +120,7 @@ async function generateSummaryWithOpenAI(url, customizacao) {
 
     // Gerar resumo com OpenAI
     const summary = await generateSummaryWithAI(transcript, settings, customizacao);
-    updateSummaryStatus(url, 'done', summary);
+    updateSummaryStatus(url, 'done', summary, null, transcript);
 
   } catch (error) {
     console.error('Erro ao gerar resumo:', error);
@@ -230,33 +231,200 @@ async function getPlayerResponse(videoId) {
 async function generateSummaryWithAI(transcript, settings, customizacao) {
   const apiKey = settings.openaiApiKey;
   const model = settings.openaiModel || 'gpt-4o-mini';
-  const maxTokens = settings.maxTokens || 1000;
+  const maxTokens = settings.maxTokens || 2000; // Aumentando para permitir resumos mais detalhados
   const language = settings.summaryLanguage || 'pt-BR';
   const style = settings.summaryStyle || 'detailed';
+  const ultraDetailed = settings.ultraDetailed || false;
 
-  // Construir prompt baseado nas configurações
-  let prompt = `Analise a seguinte transcrição de vídeo do YouTube e crie um resumo ${style} em ${language}:\n\n${transcript}\n\n`;
+  // Construir prompt muito mais detalhado baseado nas configurações
+  let systemPrompt = `Você é um especialista em análise de conteúdo de vídeos do YouTube. Sua função é criar resumos extremamente detalhados e bem estruturados em markdown. `;
   
-  switch (style) {
-    case 'concise':
-      prompt += 'Crie um resumo conciso e direto dos pontos principais.';
-      break;
-    case 'bullet':
-      prompt += 'Organize o resumo em tópicos e subtópicos com marcadores.';
-      break;
-    case 'academic':
-      prompt += 'Crie um resumo acadêmico formal com análise detalhada.';
-      break;
-    default:
-      prompt += 'Crie um resumo detalhado e bem estruturado.';
+  if (language === 'pt-BR') {
+    systemPrompt += `Sempre responda em português brasileiro com formatação markdown impecável.`;
+  } else {
+    systemPrompt += `Always respond in ${language} with impeccable markdown formatting.`;
+  }
+
+  let prompt;
+  
+  if (ultraDetailed) {
+    prompt = `Analise profundamente a seguinte transcrição de vídeo do YouTube e crie um resumo ULTRA DETALHADO em ${language}:
+
+TRANSCRIÇÃO:
+${transcript}
+
+Crie um resumo seguindo esta estrutura OBRIGATÓRIA em markdown:
+
+# 📝 Resumo Completo do Vídeo
+
+## 🎯 Resumo Executivo
+[Um parágrafo conciso com os pontos mais importantes]
+
+## 📋 Pontos Principais
+[Lista detalhada dos principais tópicos abordados]
+
+## 🔍 Análise Detalhada
+### Introdução
+[Análise da introdução do vídeo]
+
+### Desenvolvimento
+[Análise detalhada do conteúdo principal, dividida em seções lógicas]
+
+### Conclusão
+[Análise das conclusões apresentadas]
+
+## 💡 Insights e Takeaways
+[Principais aprendizados e insights extraídos]
+
+## 🎯 Aplicações Práticas
+[Como aplicar o conhecimento apresentado]
+
+## 📊 Dados e Estatísticas Mencionados
+[Qualquer dado, número ou estatística citados no vídeo]
+
+## 🔗 Referências e Recursos Mencionados
+[Links, livros, ferramentas ou recursos citados]
+
+## 📝 Notas e Observações
+[Observações adicionais importantes]
+
+---
+*Resumo gerado por IA a partir da transcrição completa do vídeo*`;
+  } else {
+    switch (style) {
+      case 'concise':
+        prompt = `Analise a seguinte transcrição de vídeo do YouTube e crie um resumo CONCISO em ${language}:
+
+TRANSCRIÇÃO:
+${transcript}
+
+Crie um resumo seguindo esta estrutura em markdown:
+
+# 📝 Resumo Conciso
+
+## 🎯 Pontos Principais
+[3-5 pontos principais em tópicos]
+
+## 💡 Conclusão
+[Conclusão resumida em 1-2 parágrafos]
+
+---
+*Resumo conciso gerado por IA*`;
+        break;
+        
+      case 'bullet':
+        prompt = `Analise a seguinte transcrição de vídeo do YouTube e crie um resumo EM TÓPICOS em ${language}:
+
+TRANSCRIÇÃO:
+${transcript}
+
+Crie um resumo seguindo esta estrutura em markdown:
+
+# 📝 Resumo em Tópicos
+
+## 🎯 Tópicos Principais
+• **Tópico 1**: [Descrição detalhada]
+  - Subtópico importante
+  - Outro subtópico
+  
+• **Tópico 2**: [Descrição detalhada]
+  - Subtópico importante
+  - Outro subtópico
+
+## 💡 Pontos de Destaque
+• [Ponto importante 1]
+• [Ponto importante 2]
+• [Ponto importante 3]
+
+## 🎯 Conclusões
+• [Conclusão principal]
+• [Conclusão secundária]
+
+---
+*Resumo em tópicos gerado por IA*`;
+        break;
+        
+      case 'academic':
+        prompt = `Analise a seguinte transcrição de vídeo do YouTube e crie um resumo ACADÊMICO FORMAL em ${language}:
+
+TRANSCRIÇÃO:
+${transcript}
+
+Crie um resumo seguindo esta estrutura acadêmica em markdown:
+
+# 📚 Análise Acadêmica do Conteúdo
+
+## 📋 Abstract
+[Resumo executivo de 100-150 palavras]
+
+## 🎯 Introdução
+[Contextualização do tema abordado]
+
+## 📖 Metodologia Apresentada
+[Métodos, técnicas ou abordagens discutidas]
+
+## 🔍 Análise Crítica do Conteúdo
+### Argumentos Principais
+[Análise dos argumentos apresentados]
+
+### Evidências e Suporte
+[Análise das evidências fornecidas]
+
+### Limitações Identificadas
+[Possíveis limitações ou pontos não abordados]
+
+## 💡 Contribuições e Relevância
+[Contribuições do conteúdo para o campo de conhecimento]
+
+## 🎯 Conclusões
+[Conclusões fundamentadas baseadas na análise]
+
+## 📚 Referências Mencionadas
+[Bibliografia ou recursos citados no vídeo]
+
+---
+*Análise acadêmica gerada por IA*`;
+        break;
+        
+      default: // detailed
+        prompt = `Analise a seguinte transcrição de vídeo do YouTube e crie um resumo DETALHADO E ESTRUTURADO em ${language}:
+
+TRANSCRIÇÃO:
+${transcript}
+
+Crie um resumo seguindo esta estrutura em markdown:
+
+# 📝 Resumo Detalhado
+
+## 🎯 Visão Geral
+[Parágrafo introdutório sobre o conteúdo do vídeo]
+
+## 📋 Principais Tópicos Abordados
+[Lista detalhada dos temas principais]
+
+## 🔍 Desenvolvimento do Conteúdo
+[Análise detalhada do conteúdo, dividida em seções lógicas]
+
+## 💡 Insights Importantes
+[Principais insights e aprendizados]
+
+## 🎯 Conclusões
+[Síntese das conclusões apresentadas]
+
+## 📊 Informações Complementares
+[Dados, estatísticas ou informações adicionais mencionadas]
+
+---
+*Resumo detalhado gerado por IA*`;
+    }
   }
 
   if (settings.includeTimestamps) {
-    prompt += ' Inclua timestamps relevantes quando disponíveis.';
+    prompt += `\n\nIMPORTANTE: Inclua timestamps relevantes (formato [MM:SS] ou [HH:MM:SS]) quando mencionar tópicos específicos.`;
   }
 
   if (customizacao && customizacao.comentario) {
-    prompt += `\n\nConsiderações adicionais: ${customizacao.comentario}`;
+    prompt += `\n\nCONSIDERAÇÕES ADICIONAIS DO USUÁRIO: ${customizacao.comentario}`;
   }
 
   try {
@@ -271,7 +439,7 @@ async function generateSummaryWithAI(transcript, settings, customizacao) {
         messages: [
           {
             role: 'system',
-            content: 'Você é um assistente especializado em criar resumos de vídeos do YouTube. Sempre responda em markdown bem formatado.'
+            content: systemPrompt
           },
           {
             role: 'user',

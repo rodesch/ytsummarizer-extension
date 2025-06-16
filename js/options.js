@@ -5,6 +5,7 @@ document.addEventListener('DOMContentLoaded', function() {
   const maxTokensInput = document.getElementById('maxTokens');
   const summaryLanguageSelect = document.getElementById('summaryLanguage');
   const summaryStyleSelect = document.getElementById('summaryStyle');
+  const ultraDetailedCheck = document.getElementById('ultraDetailed');
   const includeTimestampsCheck = document.getElementById('includeTimestamps');
   const autoSummarizeCheck = document.getElementById('autoSummarize');
   
@@ -24,9 +25,10 @@ document.addEventListener('DOMContentLoaded', function() {
   const defaultSettings = {
     openaiApiKey: '',
     openaiModel: 'gpt-4o-mini',
-    maxTokens: 1000,
+    maxTokens: 2000,
     summaryLanguage: 'pt-BR',
     summaryStyle: 'detailed',
+    ultraDetailed: false,
     includeTimestamps: false,
     autoSummarize: false
   };
@@ -70,6 +72,7 @@ document.addEventListener('DOMContentLoaded', function() {
       maxTokensInput.value = data.maxTokens || defaultSettings.maxTokens;
       summaryLanguageSelect.value = data.summaryLanguage || defaultSettings.summaryLanguage;
       summaryStyleSelect.value = data.summaryStyle || defaultSettings.summaryStyle;
+      ultraDetailedCheck.checked = data.ultraDetailed || false;
       includeTimestampsCheck.checked = data.includeTimestamps || false;
       autoSummarizeCheck.checked = data.autoSummarize || false;
       
@@ -122,6 +125,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const settings = {
       summaryLanguage: summaryLanguageSelect.value,
       summaryStyle: summaryStyleSelect.value,
+      ultraDetailed: ultraDetailedCheck.checked,
       includeTimestamps: includeTimestampsCheck.checked,
       autoSummarize: autoSummarizeCheck.checked
     };
